@@ -5,19 +5,15 @@ class Circuit:
     def __init__(self, *primary_inputs):#, primary_outputs: list[Node], internal_nodes: list[Node], gates: list[Gate]):
         self.inputs = list(primary_inputs)
         self.outputs, self.gates, self.nodes = self.parse_circuit(self.inputs)
-        # self.outputs = primary_outputs
-        # self.internal_nodes = internal_nodes
-        # self.gates = gates
-        # todo find outputs automatically from gates
 
     def parse_circuit(self, inputs: list[Node]):
         """
         goes through the inputs and finds all the primary outputs and all of the internal nodes and gates
-        :param inputs: mapping from str to Node
+        :param inputs: mapping from str to Node for primary inputs
         """
-        outputs = {}
-        gates = {}
-        nodes = {}
+        outputs = {}    # {name: Node}
+        gates = {}      # {gate_depth: {name: Gate}}
+        nodes = {}      # {name: Node}
 
         unexplored_nodes = inputs.copy()
         while len(unexplored_nodes) > 0:
@@ -28,14 +24,18 @@ class Circuit:
             for gate in node.gates:
                 if gate.output.name not in nodes and gate.output.name not in unexplored_nodes:
                     unexplored_nodes.append(gate.output)
-                gates[gate.name] = gate
+                depth = gate.depth
+                if depth in gates:
+                    gates[depth][gate.name] = gate
+                else:
+                    gates[depth] = {gate.name: gate}
 
         return outputs, gates, nodes
 
-
     def reset(self):
-        for gate in self.gates:
-            gate.reset()
+        for depth in self.gates:
+            for gate_name in self.gates[depth]:
+                self.gates[depth][gate_name].reset()
 
     def set_inputs(self, inputs):
         assert len(inputs) == len(self.inputs)
@@ -48,10 +48,14 @@ class Circuit:
             outputs.append(node.state)
         return outputs
 
-    def propagate(self, inputs, verbose=False):
+    def propagate(self, inputs, verbose=False, reset=True):
+        if reset:
+            self.reset()
         self.set_inputs(inputs)
-        for gate in self.gates.values():
-            gate.propagate(verbose=verbose)
+        depths = sorted(self.gates.keys())
+        for depth in depths:
+            for gate_name in self.gates[depth]:
+                self.gates[depth][gate_name].propagate(verbose=verbose)
         return self.get_outputs()
 
     def __repr__(self):
