@@ -89,7 +89,7 @@ class Gate(Generic[GateType]):
     """
     Deals with 5 logic values:
     0, 1, X (undetermined), D (1 on good circuit, 0 on bad circuit) and ~D (not D)
-    Inputs may not have both X's and D's
+    Inputs may have both X's and D's
     """
     name_counts = {
         "not": 0,
