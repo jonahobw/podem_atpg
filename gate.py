@@ -1,3 +1,4 @@
+import itertools
 from typing import TypeVar, Generic
 
 # needed because node and gate classes reference each other
@@ -21,6 +22,78 @@ class Node:
         else:
             Node.name_count += 1
             self.name = generate_name(self.name_count)
+        self.cc0, self.cc1 = self.set_controllability()
+
+    def set_controllability(self):
+        """Return a tuple of CC0, CC1"""
+        if self.is_po():
+            return 1, 1
+        gate_type = self.gate_output.type
+        gate_inputs = self.gate_output.inputs
+
+        def xor_cc1_xnor_cc0(inputs):
+            """
+            Gets the xor cc1 and the equivalent xnor cc0
+            = min(all combinations with odd number of 1's) + 1
+            """
+            def construct_odds(n):
+                """
+                Returns all combinations of n input variables with odd number of 1's.
+
+                If a number is a 1, it is included in the result, else it is not
+                included in the result and is assumed to be 0.
+
+                Returned as a list of tuples.
+
+                Examples:
+                construct_odds(2) -> [(1), (2)]
+                construct_odds(3) -> [(1), (2), (3), (1, 2, 3)]
+                construct_odds(4) -> [(1), (2), (3), (4), (1, 2, 3), (1, 2, 4), (1, 3, 4), (2, 3, 4)]
+
+                :param n: number of input variables
+                :return: a list of tuples
+                """
+                odds = [x for x in range(1, n + 1) if x % 2 == 1]
+
+                res = []
+                for odd in odds:
+                    res.extend(list(itertools.combinations(range(1, n + 1), odd)))
+                return res
+
+            min = 1000000
+            for combination in construct_odds(len(inputs)):
+                term = 0
+                for idx, input in enumerate(gate_inputs):
+                    if idx in combination:
+                        term += input.cc1
+                    else:
+                        term += input.cc0
+                if term < min:
+                    min = term
+            return min + 1
+
+        if gate_type == 'not':
+            cc0 = gate_inputs[0].cc1 + 1
+            cc1 = gate_inputs[0].cc0 + 1
+        if gate_type == 'and':
+            cc0 = min([x.cc0 for x in gate_inputs]) + 1
+            cc1 = sum([x.cc1 for x in gate_inputs]) + 1
+        if gate_type == 'nand':
+            cc0 = sum([x.cc1 for x in gate_inputs]) + 1
+            cc1 = min([x.cc0 for x in gate_inputs]) + 1
+        if gate_type == 'or':
+            cc0 = sum([x.cc0 for x in gate_inputs]) + 1
+            cc1 = min([x.cc1 for x in gate_inputs]) + 1
+        if gate_type == 'nor':
+            cc0 = min([x.cc1 for x in gate_inputs]) + 1
+            cc1 = sum([x.cc0 for x in gate_inputs]) + 1
+        if gate_type == 'xor':
+            cc0 = min([sum([x.cc0 for x in gate_inputs]), sum([x.cc1 for x in gate_inputs])]) + 1
+            cc1 = xor_cc1_xnor_cc0(gate_inputs)
+        if gate_type == 'xnor':
+            cc0 = xor_cc1_xnor_cc0(gate_inputs)
+            cc1 = min([sum([x.cc0 for x in gate_inputs]), sum([x.cc1 for x in gate_inputs])]) + 1
+        return cc0, cc1
 
     def set_stuck_at(self, stuck_at):
         self.stuck_at = stuck_at
@@ -128,6 +201,34 @@ class Gate(Generic[GateType]):
                 depth = input.gate_output.depth
         return depth + 1
 
+    def get_hardest_controllable_input(self, val):
+        """Returns the input node to this gate that is the hardest to control.
+        :param val: if 0, then get hardest cc0 controllability, else cc1
+        """
+        maxm = 0
+        node = None
+        attribute = "cc0" if val == 0 else "cc1"
+        for inp in self.inputs:
+            controllability = getattr(inp, attribute)
+            if controllability > maxm:
+                node = inp
+                maxm = controllability
+        return node
+
+    def get_easiest_controllable_input(self, val):
+        """Returns the input node to this gate that is the easiest to control.
+        :param val: if 0, then get hardest cc0 controllability, else cc1
+        """
+        minm = 0
+        node = None
+        attribute = "cc0" if val == 0 else "cc1"
+        for inp in self.inputs:
+            controllability = getattr(inp, attribute)
+            if controllability < minm:
+                node = inp
+                minm = controllability
+        return node
+
     def reset(self):
         for node in self.inputs:
             node.reset()
@@ -204,8 +305,6 @@ class Gate(Generic[GateType]):
             return 0
 
         # if we get to here, we know there are no 1's, just 0, X, D, ~D
-        if 'D' in inputs:
-            return 'D'
 
         d_found = 'D' in inputs
         d_prime_found = '~D' in inputs

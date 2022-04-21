@@ -1,21 +1,73 @@
-from typing import List, Union
 from circuit import Circuit
-from gate import Node, Gate
+from gate import Node
+
+class PIAssignment:
+    def __init__(self, node: Node, val: int, alternative=False):
+        self.node = node
+        assert val in [0, 1]
+        self.val = val
+        self.alternative_tried = alternative
+
+    def assign(self, val=None):
+        if not val:
+            val = self.val
+        self.node.set_state(val)
+
+class ImplicationStack:
+
+    def __init__(self):
+        self.stack = []
+        self.all_combinations_tried = False
+
+    def imply(self, node: Node, val: int, alternative=False):
+        assignment = PIAssignment(node, val, alternative=alternative)
+        self.stack.append(assignment)
+        assignment.assign()
+
+    def backtrack(self):
+        current = self.stack.pop(-1)
+        while(current.alternative_tried):
+            if len(self.stack) == 0:
+                # no combinations left
+                self.all_combinations_tried = True
+                return False
+            current = self.stack.pop(-1)
+
+        opposite = [1, 0]
+        self.imply(current.node, opposite[current.val], True)
+        return True
+
+    def set_x(self):
+        """Sets the last implied node to an X and removes from the implication stack."""
+        last_implication = self.stack.pop(-1)
+        last_implication.assign('X')
+
+    def get_assignments(self):
+        assigments = {}
+        for assigment in self.stack:
+            assigments[assigment.node] = assigment.val
+        return assigments
 
 
-def get_po_list(circuit:Circuit, fault_node:Node) -> List[Node]:
-    return list(circuit.find_pos_from_node(fault_node).values())
-
-
-# alternatively call circuit.has_fault_propagated (assumes circuit.propagate has already been called)
-def has_fault_propagated(circuit:Circuit, inputs: List[Union[int, str]]):
-    output = circuit.propagate(inputs=inputs)
-    return 'D' in output or '~D' in output
-
-def get_d_frontier(circuit:Circuit):
-    # todo speedup by calling circuit.find_nodes_gates_from_fault()
-    return circuit.get_d_frontier()
-
-
-def x_path_check(circuit:Circuit, dfrontier: List[Node]):
-    return circuit.x_path_check(dfrontier=dfrontier)
+def podem(circuit: Circuit, faulty_node, stuck_at, implication_stack):
+    while not circuit.fault_propagated():
+        if circuit.x_path_check():
+            node, val = circuit.objective(faulty_node, stuck_at)
+            pi, pi_val = circuit.backtrace(node, val)
+            implication_stack.imply(pi, pi_val)
+            circuit.propagate()
+            if podem(circuit, faulty_node, stuck_at):
+                return True
+            # backtrack
+            implication_stack.backtrack()
+            circuit.propagate()
+            if podem(circuit, faulty_node, stuck_at):
+                return True
+            implication_stack.set_x()
+            return False
+        elif implication_stack.all_combinations_tried:
+            return False
+        else:
+            implication_stack.backtrack()
+            circuit.propagate()
+    return True

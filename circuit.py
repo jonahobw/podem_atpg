@@ -128,10 +128,11 @@ class Circuit:
             outputs.append(node.state)
         return outputs
 
-    def propagate(self, inputs, verbose=False, reset=True):
+    def propagate(self, inputs=None, verbose=False, reset=True):
         if reset:
             self.reset()
-        self.set_inputs(inputs)
+        if inputs:
+            self.set_inputs(inputs)
         depths = sorted(self.gates.keys())
         for depth in depths:
             for gate_name in self.gates[depth]:
@@ -197,15 +198,28 @@ class Circuit:
             c = 1
         return node, opposite[c]
 
-    def backtrace(self, node, node_value):
+    def backtrace(self, node: Node, node_value: int):
         """
         Given a node and the value to set on that node, backtrace to a PI and assign it.
 
         :param node: the node which we want to set
-        :param node_value: the value which we want to set on that node
+        :param node_value: the value which we want to set on that node, either 1 or 0
         :return: a tuple of primary input node, value to set on that node
         """
-
+        opposite = [1, 0]
+        while not node.is_pi():
+            if node.gate_output.type in ['nand', 'not', 'nor']:
+                node_value = opposite[node_value]
+                node = node.gate_output.inputs[0]
+            # see if all inputs need to be set
+            elif (node.gate_output.type == 'and' and node_value == 1) or \
+                (node.gate_output.type == 'or' and node_value == 0):
+                # select unassigned input a of gate s with hardest controllability to value v
+                node = node.gate_output.get_hardest_controllable_input(node_value)
+            else:
+                # select unassigned input a of gate s with easiest controllability to value v
+                node = node.gate_output.get_easiest_controllable_input(node_value)
+        return node, node_value
 
 
     def __repr__(self):
