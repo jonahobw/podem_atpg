@@ -6,8 +6,9 @@ class Circuit:
         self.inputs = list(primary_inputs)
         self.outputs, self.gates, self.nodes = self.parse_circuit(self.inputs)
 
+        self.fault_node = self.find_fault_node()
+
         # these will be set when investigating a fault and calling self.find_nodes_gates_from_fault
-        self.fault_node = None
         self.fault_pos = None
         self.fault_pis = None
         self.fault_gates = None
@@ -21,16 +22,16 @@ class Circuit:
         """
         outputs = {}    # {name: Node}
         gates = {}      # {gate_depth: {name: Gate}}
-        nodes = {}      # {name: Node}
+        nodes = []
 
         unexplored_nodes = inputs.copy()
         while len(unexplored_nodes) > 0:
             node = unexplored_nodes.pop(0)
-            nodes[node.name] = node
+            nodes.append(node)
             if node.is_po():
                 outputs[node.name] = node
             for gate in node.gates:
-                if gate.output.name not in nodes and gate.output.name not in unexplored_nodes:
+                if gate.output not in nodes and gate.output not in unexplored_nodes:
                     unexplored_nodes.append(gate.output)
                 depth = gate.depth
                 if depth in gates:
@@ -40,7 +41,16 @@ class Circuit:
 
         return outputs, gates, nodes
 
-    def find_nodes_gates_from_fault(self, fault_node: Node):
+    def find_fault_node(self):
+        faulty_nodes = []
+        for node in self.nodes:
+            if node.is_faulty():
+                faulty_nodes.append(node)
+        if len(faulty_nodes) == 1:
+            return faulty_nodes[0]
+        raise ValueError(f"More than 1 faulty node: {faulty_nodes}")
+
+    def find_nodes_gates_from_fault(self, fault_node: Node = None):
         """
         Given a node with a fault, return a tuple of
 
@@ -58,6 +68,10 @@ class Circuit:
         for each PO:
             go backward until you reach all PI's reachable from this PO, add them to the dict of PI's and gates
         """
+        if not fault_node:
+            fault_node = self.fault_node
+            if not fault_node:
+                raise ValueError("No faulty nodes in circuit.")
         primary_outputs = self.find_pos_from_node(fault_node)
         outputs_list = list(primary_outputs.values())
         seen_nodes = []
@@ -128,7 +142,7 @@ class Circuit:
             outputs.append(node.state)
         return outputs
 
-    def propagate(self, inputs=None, verbose=False, reset=True):
+    def propagate(self, inputs=None, verbose=False, reset=False):
         if reset:
             self.reset()
         if inputs:
@@ -137,6 +151,8 @@ class Circuit:
         for depth in depths:
             for gate_name in self.gates[depth]:
                 self.gates[depth][gate_name].propagate(verbose=verbose)
+        if verbose:
+            print("\n\n")
         return self.get_outputs()
 
     def fault_propagated(self):
@@ -148,7 +164,7 @@ class Circuit:
         #todo speedup by adding another parameter of [nodes] which is returned as the
         # list of internal nodes from self.find_nodes_gates_from_fault
         d_frontier = [] # list of Node objects
-        for node in list(self.nodes.values()):
+        for node in self.nodes:
             if node.is_on_d_frontier():
                 d_frontier.append(node)
         return d_frontier
@@ -157,9 +173,18 @@ class Circuit:
         """Returns true if there is an X path from any 1 of the D frontier gates to a PO."""
         if not dfrontier:
             dfrontier = self.get_d_frontier()
+
+        # check nodes on D-frontier
         for node in dfrontier:
             if node.has_x_path():
                 return True
+
+        # no nodes on d frontier, could be because this is the initialization, check PIs
+        if len(dfrontier) == 0:
+            for node in self.inputs:
+                if node.has_x_path():
+                    return True
+
         return False
 
     def objective(self, node_with_fault, stuck_at, d_frontier=None):
@@ -194,7 +219,7 @@ class Circuit:
         c = 0
         if gate.control_value != -1:
             c = gate.control_value
-        if gate.type in ['xor', 'xnor'] and 1:  #todo add CC0 and CC1
+        if gate.type in ['xor', 'xnor'] and node.cc0 < node.cc1:
             c = 1
         return node, opposite[c]
 

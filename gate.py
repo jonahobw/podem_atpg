@@ -219,7 +219,7 @@ class Gate(Generic[GateType]):
         """Returns the input node to this gate that is the easiest to control.
         :param val: if 0, then get hardest cc0 controllability, else cc1
         """
-        minm = 0
+        minm = 100000
         node = None
         attribute = "cc0" if val == 0 else "cc1"
         for inp in self.inputs:
@@ -251,7 +251,7 @@ class Gate(Generic[GateType]):
 
     def _propagate(self, inputs):
         """Calls appropriate function"""
-        return int(getattr(self, f"{self.type}_propagate")(inputs))
+        return getattr(self, f"{self.type}_propagate")(inputs)
 
     def invert(self, val):
         inverted = {
@@ -273,7 +273,7 @@ class Gate(Generic[GateType]):
         if 0 in inputs: # at least one 0
             return 0
 
-        if all(inputs): # all 1's
+        if all([x == 1 for x in inputs]): # all 1's
             return 1
 
         # if we get to here, we know there are no 0's, just 1, X, D, ~D
@@ -345,7 +345,8 @@ class Gate(Generic[GateType]):
         return self.invert(self.xor_propagate(inputs))
 
     def __repr__(self):
-        return f"Gate {self.name} (depth {self.depth}):\t{self.output} \t= \t{self.type.upper()}{self.inputs}"
+        return f"Gate {self.name}".ljust(12) + f"(depth {self.depth}):".ljust(13) + \
+               f"{self.output}".ljust(12) + f"= \t{self.type.upper()}{self.inputs}"
 
 
 class Not(Gate):
