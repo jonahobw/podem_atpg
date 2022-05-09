@@ -22,11 +22,14 @@ class Node:
         else:
             Node.name_count += 1
             self.name = generate_name(self.name_count)
-        self.cc0, self.cc1 = self.set_controllability()
+        self.cc0 = None
+        self.cc1 = None
 
     def set_controllability(self):
         """Return a tuple of CC0, CC1"""
-        if self.is_po():
+        if self.is_pi():
+            self.cc0 = 1
+            self.cc1 = 1
             return 1, 1
         gate_type = self.gate_output.type
         gate_inputs = self.gate_output.inputs
@@ -64,7 +67,7 @@ class Node:
             for combination in construct_odds(len(inputs)):
                 term = 0
                 for idx, input in enumerate(gate_inputs):
-                    if idx in combination:
+                    if idx + 1 in combination:
                         term += input.cc1
                     else:
                         term += input.cc0
@@ -93,10 +96,19 @@ class Node:
         if gate_type == 'xnor':
             cc0 = xor_cc1_xnor_cc0(gate_inputs)
             cc1 = min([sum([x.cc0 for x in gate_inputs]), sum([x.cc1 for x in gate_inputs])]) + 1
+        self.cc0 = cc0
+        self.cc1 = cc1
         return cc0, cc1
 
     def set_stuck_at(self, stuck_at):
         self.stuck_at = stuck_at
+    
+    def remove_fault(self):
+        self.stuck_at = None
+    
+    def make_faulty(self, stuck_at: int):
+        self.stuck_at = stuck_at
+        self.activate_fault()
 
     def reset(self):
         self.state = 'X'
@@ -118,6 +130,11 @@ class Node:
             return
         self.state = val
 
+    def activate_fault(self):
+        if self.is_faulty():
+            state = ['D', '~D']
+            self.state = state[self.stuck_at]
+
     def is_po(self):
         return len(self.gates) == 0
 
@@ -130,10 +147,10 @@ class Node:
         if self.is_po():
             return False
 
-        if not self.state == 'D' or not self.state == '~D':
+        if not self.state == 'D' and not self.state == '~D':
             return False
 
-        gate_outs = [gate.output for gate in self.gates]
+        gate_outs = [gate.output.state for gate in self.gates]
         return 'X' in gate_outs
 
     def has_x_path(self):
@@ -155,7 +172,9 @@ class Node:
         return self.gate_output == None
 
     def __repr__(self):
-        return f"Node {self.name}: {self.state}"
+        start = "^" if self.is_pi() else ""
+        end = "$" if self.is_po() else ""
+        return f"{start}{end}".ljust(1) + f"Node {self.name}".ljust(7) + ":" + f" {self.state}".rjust(3)
 
 
 class Gate(Generic[GateType]):
@@ -201,28 +220,45 @@ class Gate(Generic[GateType]):
                 depth = input.gate_output.depth
         return depth + 1
 
-    def get_hardest_controllable_input(self, val):
+    def get_unassigned_inputs(self):
+        return [node for node in self.inputs if node.state == 'X']
+
+    def get_assigned_inputs(self):
+        return [node for node in self.inputs if node.state != 'X']
+
+    def get_hardest_controllable_input(self, val, unassigned=True):
         """Returns the input node to this gate that is the hardest to control.
         :param val: if 0, then get hardest cc0 controllability, else cc1
         """
+        inputs = []
+        if unassigned:
+            inputs = self.get_unassigned_inputs()
+        if len(inputs) == 0 or not unassigned:
+            inputs = self.inputs
         maxm = 0
         node = None
         attribute = "cc0" if val == 0 else "cc1"
-        for inp in self.inputs:
+        for inp in inputs:
             controllability = getattr(inp, attribute)
             if controllability > maxm:
                 node = inp
                 maxm = controllability
         return node
 
-    def get_easiest_controllable_input(self, val):
+    def get_easiest_controllable_input(self, val, unassigned=True):
         """Returns the input node to this gate that is the easiest to control.
         :param val: if 0, then get hardest cc0 controllability, else cc1
         """
+        inputs = []
+        if unassigned:
+            inputs = self.get_unassigned_inputs()
+        if len(inputs) == 0 or not unassigned:
+            inputs = self.inputs
+
         minm = 100000
         node = None
         attribute = "cc0" if val == 0 else "cc1"
-        for inp in self.inputs:
+        for inp in inputs:
             controllability = getattr(inp, attribute)
             if controllability < minm:
                 node = inp
@@ -346,7 +382,7 @@ class Gate(Generic[GateType]):
 
     def __repr__(self):
         return f"Gate {self.name}".ljust(12) + f"(depth {self.depth}):".ljust(13) + \
-               f"{self.output}".ljust(12) + f"= \t{self.type.upper()}{self.inputs}"
+               f"{self.output}".ljust(13) + f" =   {self.type.upper()}".ljust(9) + f" {self.inputs}"
 
 
 class Not(Gate):
