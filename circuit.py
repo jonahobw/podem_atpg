@@ -1,10 +1,12 @@
-from typing import Tuple
+from typing import Tuple, List
 from gate import Node, Gate, And
 
+
 class Circuit:
-    def __init__(self, *primary_inputs):#, primary_outputs: list[Node], internal_nodes: list[Node], gates: list[Gate]):
+    def __init__(self, *primary_inputs):
         self.inputs = list(primary_inputs)
         self.outputs, self.gates, self.nodes = self.parse_circuit(self.inputs)
+        self.gates_list = self.get_gates_list()
         self.set_controllability()
 
         self.fault_node = self.find_fault_node()
@@ -23,13 +25,12 @@ class Circuit:
         raise ValueError(f"No node named {name}")
 
     def parse_circuit(self, inputs: list[Node]):
-        # todo switch return from dicts to list
         """
         goes through the inputs and finds all the primary outputs and all of the internal nodes and gates
         :param inputs: mapping from str to Node for primary inputs
         """
-        outputs = {}    # {name: Node}
-        gates = {}      # {gate_depth: {name: Gate}}
+        outputs = {}  # {name: Node}
+        gates = {}  # {gate_depth: {name: Gate}}
         nodes = []
 
         unexplored_nodes = inputs.copy()
@@ -48,6 +49,12 @@ class Circuit:
                     gates[depth] = {gate.name: gate}
 
         return outputs, gates, nodes
+
+    def get_gates_list(self) -> List[Gate]:
+        gates = []
+        for depth in self.gates:
+            gates.extend(list(self.gates[depth].values()))
+        return gates
 
     def set_controllability(self):
         depths = sorted(self.gates.keys())
@@ -137,7 +144,7 @@ class Circuit:
         nodes_to_explore = [node]
 
         while len(nodes_to_explore) > 0:
-            current_node = nodes_to_explore.pop(-1)     # depth first
+            current_node = nodes_to_explore.pop(-1)  # depth first
             seen_node_names.append(current_node.name)
             if current_node.is_po():
                 primary_outputs[current_node.name] = current_node
@@ -177,39 +184,46 @@ class Circuit:
             print("\n\n")
         return self.get_outputs()
 
-    def fault_propagated(self):
+    def fault_propagated(self, verbose: bool = False):
         outputs = self.get_outputs()
-        return 'D' in outputs or '~D' in outputs
+        res = "D" in outputs or "~D" in outputs
+        if verbose:
+            print(
+                f"Fault propagated: {'PROPAGATED TO PO!' if res else 'not propagated to PO.'}"
+            )
+        return res
 
-    def get_d_frontier(self):
-        """Return list of nodes on d-frontier"""
-        #todo speedup by adding another parameter of [nodes] which is returned as the
-        # list of internal nodes from self.find_nodes_gates_from_fault
-        d_frontier = [] # list of Node objects
-        for node in self.nodes:
-            if node.is_on_d_frontier():
-                d_frontier.append(node)
+    def get_d_frontier(self) -> List[Gate]:
+        """Return list of gates on d-frontier"""
+        d_frontier = []  # list of Gate objects
+        for gate in self.gates_list:
+            if gate.is_on_d_frontier():
+                d_frontier.append(gate)
         return d_frontier
 
-    def x_path_check(self, dfrontier=None):
-        """Returns true if there is an X path from any 1 of the D frontier gates to a PO."""
+    def x_path_check(self, fault_node: Node, dfrontier=None, verbose: bool = False):
+        """Returns true if there is an X path from any 1 of the D-frontier gates to a PO."""
         if not dfrontier:
             dfrontier = self.get_d_frontier()
 
-        # check nodes on D-frontier
-        for node in dfrontier:
-            if node.has_x_path():
-                return True
+        res = False
 
-        # no nodes on d frontier, could be because this is the initialization, check PIs
+        # no nodes on d frontier, could be because this is the initialization, check fault node
         if len(dfrontier) == 0:
-            for node in self.inputs:
-                if node.has_x_path():
-                    return True
+            res = fault_node.has_x_path()
+        else:
+            # check nodes on D-frontier
+            for gate in dfrontier:
+                if gate.output.has_x_path():
+                    res = True
 
-        return False
+        if verbose:
+            print(f"X Path: path {'' if res else 'not'} found to PO.")
+        return res
 
-    def objective(self, node_with_fault, stuck_at, d_frontier=None):
+    def objective(
+        self, node_with_fault, stuck_at, d_frontier=None, verbose: bool = False
+    ):
         """
         Return a node and assignment for that node that attempts to activate a target node with a certain
         stuck at fault.
@@ -222,30 +236,31 @@ class Circuit:
         assert stuck_at in opposite
 
         # if gate unassigned, return opposite
-        if node_with_fault.state == 'X':
+        if node_with_fault.state == "X":
+            if verbose:
+                print(f"Objective:\tSet {node_with_fault} to {opposite[stuck_at]}")
             return node_with_fault, opposite[stuck_at]
 
         # select a node from the D-Frontier
         if not d_frontier:
             d_frontier = self.get_d_frontier()
         assert len(d_frontier) > 0
-        # todo method of selecting node here?  maybe depth?
-        node = d_frontier[0]
-        # select a gate that this node is connected to
-        # todo method of selecting a gate
-        gate = node.gates[0]
+        # todo method of selecting gate here?  maybe depth?
+        gate = d_frontier[0]
         # select an unassigned input to this gate
         for inp in gate.inputs:
-            if inp.state == 'X':
+            if inp.state == "X":
                 break
         c = 0
         if gate.control_value != -1:
             c = gate.control_value
-        if gate.type in ['xor', 'xnor'] and node.cc0 < node.cc1:
+        if gate.type in ["xor", "xnor"] and inp.cc0 < inp.cc1:
             c = 1
+        if verbose:
+            print(f"Objective:\tSet {inp} to {opposite[c]}")
         return inp, opposite[c]
 
-    def backtrace(self, node: Node, node_value: int, verbose: bool = True):
+    def backtrace(self, node: Node, node_value: int, verbose: bool = False):
         """
         Given a node and the value to set on that node, backtrace to a PI and assign it.
 
@@ -255,82 +270,75 @@ class Circuit:
         """
         opposite = [1, 0]
         while not node.is_pi():
+            if verbose:
+                print(f"Backtrace:\tSet {node} -> {node_value}")
 
             gate_type = node.gate_output.type
 
-            def controllable_node(prev_node, val, hardest = True) -> Node:
+            def controllable_node(prev_node, val, hardest=True) -> Node:
                 if hardest:
                     return prev_node.gate_output.get_hardest_controllable_input(val)
                 return node.gate_output.get_easiest_controllable_input(node_value)
 
-            if gate_type == 'not':
+            if gate_type == "not":
                 node_value = opposite[node_value]
                 node = node.gate_output.inputs[0]
-            if gate_type == 'and':
+            if gate_type == "and":
                 if node_value == 0:
                     node = controllable_node(node, 0, hardest=False)
                 else:
                     node = controllable_node(node, 1, hardest=True)
-            if gate_type == 'nand':
+            if gate_type == "nand":
                 node_value = opposite[node_value]
                 if node_value == 0:
                     node = controllable_node(node, node_value, hardest=True)
                 else:
                     node = controllable_node(node, node_value, hardest=False)
-            if gate_type == 'or':
+            if gate_type == "or":
                 if node_value == 0:
                     node = controllable_node(node, 0, hardest=True)
                 else:
                     node = controllable_node(node, 1, hardest=False)
-            if gate_type == 'nor':
+            if gate_type == "nor":
                 node_value = opposite[node_value]
                 if node_value == 0:
                     node = controllable_node(node, 0, hardest=False)
                 else:
                     node = controllable_node(node, 1, hardest=True)
-            if gate_type == 'xor':
+            if gate_type == "xor":
                 # todo only supports 2-input gates right now
                 unassigned_inputs = node.gate_output.get_unassigned_inputs()
                 assigned_inputs = node.gate_output.get_assigned_inputs()
-                if len(unassigned_inputs) == 2: # both X's
+                if len(unassigned_inputs) == 2:  # both X's
                     node_value = 0
                     node = controllable_node(node, 0, hardest=True)
-                else:   # assume 1 unassigned input
+                else:  # assume 1 unassigned input
                     assert len(unassigned_inputs) == 1
                     assert len(assigned_inputs) == 1
                     node = unassigned_inputs[0]
                     node_value = opposite[assigned_inputs[0].state]
-            if gate_type == 'xnor':
+            if gate_type == "xnor":
                 # todo only supports 2-input gates right now
                 unassigned_inputs = node.gate_output.get_unassigned_inputs()
                 assigned_inputs = node.gate_output.get_assigned_inputs()
-                if len(unassigned_inputs) == 2: # both X's
+                if len(unassigned_inputs) == 2:  # both X's
+                    # todo is this a bug?  Will never set to 1 if both inputs unassigned!
                     node_value = 0
                     node = controllable_node(node, 0, hardest=True)
-                else:   # assume 1 unassigned input
+                    # node_value = 1
+                    # node = controllable_node(node, 1, hardest=True)
+                else:  # assume 1 unassigned input
                     assert len(unassigned_inputs) == 1
                     assert len(assigned_inputs) == 1
                     node = unassigned_inputs[0]
-                    node_value = assigned_inputs[0].state
-
-            # if node.gate_output.type in ['nand', 'not', 'nor']:
-            #     node_value = opposite[node_value]
-            #     #node = node.gate_output.inputs[0]
-            # # see if all inputs need to be set
-            # if (node.gate_output.type == 'and' and node_value == 1) or \
-            #     (node.gate_output.type == 'or' and node_value == 0) or \
-            #     (node.gate_output.type == 'nor' and node_value == 1) or \
-            #     (node.gate_output.type == 'xnor'):
-            #     # select unassigned input a of gate s with hardest controllability to value v
-            #     node = node.gate_output.get_hardest_controllable_input(node_value)
-            # else:
-            #     # select unassigned input a of gate s with easiest controllability to value v
-            #     node = node.gate_output.get_easiest_controllable_input(node_value)
-            if verbose:
-                print(f"Backtrace:\tSet {node} -> {node_value}")
+                    if node_value == 1:
+                        node_value = assigned_inputs[0].state
+                    else:
+                        node_value = opposite[assigned_inputs[0].state]
+        if verbose:
+            print(f"Backtrace:\tSet {node} -> {node_value}")
 
         return node, node_value
-
 
     def __repr__(self):
         print("Circuit Object:")

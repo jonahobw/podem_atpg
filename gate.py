@@ -105,10 +105,12 @@ class Node:
     
     def remove_fault(self):
         self.stuck_at = None
+        self.state = 'X'
     
-    def make_faulty(self, stuck_at: int):
+    def make_faulty(self, stuck_at: int, set: bool=False):
         self.stuck_at = stuck_at
-        self.activate_fault()
+        if set:
+            self.activate_fault()
 
     def reset(self):
         self.state = 'X'
@@ -134,27 +136,21 @@ class Node:
         if self.is_faulty():
             state = ['D', '~D']
             self.state = state[self.stuck_at]
+    
+    def is_fault_activated(self):
+        if not self.is_faulty():
+            raise ValueError("Calling node.is_fault_activated on non_faulty node.")
+        state = ['D', '~D']
+        return self.state == state[self.stuck_at]
 
     def is_po(self):
         return len(self.gates) == 0
 
-    def is_on_d_frontier(self):
-        """
-        In order to be true, the state of this node must be D or ~D and one of the gates
-        which this node is connected to must have an output of X.
-        """
-
-        if self.is_po():
-            return False
-
-        if not self.state == 'D' and not self.state == '~D':
-            return False
-
-        gate_outs = [gate.output.state for gate in self.gates]
-        return 'X' in gate_outs
-
     def has_x_path(self):
         """Returns true if there is a path with only X's from this node to a PO."""
+        if self.is_po():
+            return self.state == 'X'
+
         explored = []
         # list of gates which have state X
         to_explore = [gate.output for gate in self.gates if gate.output.state == 'X']
@@ -265,6 +261,17 @@ class Gate(Generic[GateType]):
                 minm = controllability
         return node
 
+    def is_on_d_frontier(self) -> bool:
+        """In order to be true, the output must be X and there must be a D or ~D on the input."""
+        if self.output.state != 'X':
+            return False
+        
+        input_vals = [inp.state for inp in self.inputs]
+
+        if 'D' in input_vals or '~D' in input_vals:
+            return True
+        return False
+
     def reset(self):
         for node in self.inputs:
             node.reset()
@@ -274,9 +281,6 @@ class Gate(Generic[GateType]):
         """Propagate the current value of the gate's input Node to the output Node."""
         inputs = []
         for node in self.inputs:
-            # if node.state == None:
-            #     raise ValueError(f"{node} for input to gate {self.name} has state None, must be set before"
-            #                      f" calling propagate().")
             inputs.append(node.state)
         output = self._propagate(inputs)
         self.output.set_state(output)
